@@ -25,3 +25,4 @@
 - [ ] No unrelated refactors
 - [ ] Implemented from a feature branch
 - [ ] Change is deliverable without upstream `OSeMOSYS/MUIO` dependency
+- [ ] Base repo/branch is `EAPD-DRB/MUIOGO:main` (not upstream)

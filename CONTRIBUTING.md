@@ -24,7 +24,7 @@ Thanks for contributing.
 3. Keep branch changes scoped to one issue or one tightly related set of issues.
 4. Include tests or validation steps whenever behavior changes.
 5. Update docs for any setup, architecture, or workflow change.
-6. Open a PR using the repository PR template.
+6. Open a PR into `EAPD-DRB/MUIOGO:main` using the repository PR template.
 
 ## Required branching rule
 
@@ -57,6 +57,7 @@ Post updates when one of these events occurs:
   - reproducible manual verification steps.
 - Docs updated when needed.
 - No unrelated refactors in the same PR.
+- PR target is `EAPD-DRB/MUIOGO:main` (not upstream `OSeMOSYS/MUIO`).
 
 ## Definition of done
 
@@ -65,4 +66,4 @@ A task is done when:
 1. Acceptance criteria in the issue are met.
 2. Code and docs are updated together.
 3. Reviewer feedback is resolved.
-4. Changes are merged to `main`.
+4. Changes are merged to `EAPD-DRB/MUIOGO:main`.
