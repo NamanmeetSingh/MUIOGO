@@ -203,7 +203,7 @@ PARAMETERS_C = {
         'DiscountRate': ['r'],
         'OutputActivityRatio':['r','f','t','y','m'],
         'InputActivityRatio':['r','f','t','y','m'],
-        'EmissionActivityRatio':['r','e''t','y','m'],
+        'EmissionActivityRatio':['r','e','t','y','m'],
         'TotalAnnualMaxCapacityInvestment':['r','t','y'],
         'TotalAnnualMinCapacityInvestment':['r','t','y'],
         'TotalTechnologyAnnualActivityUpperLimit':['r','t','y'],

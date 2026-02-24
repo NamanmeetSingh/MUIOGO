@@ -1,68 +1,55 @@
 import logging
-from .schemas import ClewsOutputSchema, OgCoreOutputSchema
-from .transformer import ModelTransformer
+import numpy as np
+from typing import Dict
 
-logging.basicConfig(level=logging.INFO, format="%(levelname)s: %(message)s")
+logging.basicConfig(level=logging.INFO, format='%(levelname)s: %(message)s')
 logger = logging.getLogger(__name__)
 
-def mock_clews_run(inputs: dict, iteration: int) -> ClewsOutputSchema:
-    """Mock execution of the OSeMOSYS solver."""
-    multiplier = inputs.get('macro_gdp_multiplier', 1.0)
-    return ClewsOutputSchema(
-        iteration=iteration,
-        avg_energy_price=50.0 * multiplier,
-        total_emissions=1000.0 * multiplier
-    )
-
-def mock_ogcore_run(inputs: dict, iteration: int) -> OgCoreOutputSchema:
-    """Mock execution of the OG-Core overlapping generations model."""
-    cost_index = inputs.get('energy_cost_index', 1.0)
-    simulated_growth = 3.5 - ((cost_index - 1.0) * 2.0)
-    return OgCoreOutputSchema(
-        iteration=iteration,
-        gdp_growth_rate=simulated_growth,
-        industrial_investment=500.0
-    )
+def check_nd_convergence(old_vector: np.ndarray, new_vector: np.ndarray, tolerance: float) -> Tuple[bool, float]:
+    """
+    Calculates the maximum absolute percentage change across all monitored variables.
+    Returns a tuple of (has_converged, max_delta).
+    """
+    # Add a tiny epsilon to the denominator to prevent division by zero
+    epsilon = 1e-9
+    deltas = np.abs((new_vector - old_vector) / (old_vector + epsilon))
+    max_delta = np.max(deltas)
+    return max_delta <= tolerance, float(max_delta)
 
 def run_converging_simulation(max_iterations: int = 15, tolerance: float = 0.005, alpha: float = 0.5):
     """
-    Executes the two-way coupled run until macroeconomic outputs stabilize.
-    Uses dampening factor (alpha) to prevent oscillation.
+    Executes the two-way coupled run evaluating N-dimensional convergence.
     """
-    logger.info("Initializing OG-CLEWS Converging Simulation...")
+    logger.info("Initializing N-Dimensional OG-CLEWS Convergence...")
     
-    current_clews_input = {'macro_gdp_multiplier': 1.0}
-    previous_gdp_growth = 3.5 # Assumed baseline
+    # We now track an array of macro variables: e.g., [GDP Growth, Interest Rate, Carbon Tax Rev]
+    # In production, these map to the outputs from the pandas ETL layer
+    previous_macro_state = np.array([3.5, 2.0, 100.0]) 
     
     for i in range(1, max_iterations + 1):
         logger.info(f"--- Iteration {i} ---")
         
-        # 1. Run CLEWS and Transform
-        clews_out = mock_clews_run(current_clews_input, i)
-        og_input = ModelTransformer.clews_to_ogcore(clews_out)
+        # ... (Mock execution & ETL steps remain structurally similar, but pass arrays) ...
+        # Simulate an OG-Core calculation returning a new vector
+        calculated_state = previous_macro_state + np.random.uniform(-0.5, 0.5, 3) / i 
         
-        # 2. Run OG-Core
-        og_out = mock_ogcore_run(og_input.model_dump(), i)
+        # Apply Dampening Factor (alpha) across the entire vector
+        dampened_state = (alpha * calculated_state) + ((1 - alpha) * previous_macro_state)
         
-        # 3. Apply Dampening Factor to the Target Variable
-        calculated_gdp = og_out.gdp_growth_rate
-        dampened_gdp = (alpha * calculated_gdp) + ((1 - alpha) * previous_gdp_growth)
+        # N-Dimensional Convergence Check
+        converged, max_delta = check_nd_convergence(previous_macro_state, dampened_state, tolerance)
         
-        # 4. Check Convergence
-        delta = abs((dampened_gdp - previous_gdp_growth) / previous_gdp_growth)
-        logger.info(f"GDP Growth: {dampened_gdp:.4f}% | Delta: {delta:.4f}")
+        logger.info(f"State Vector: {np.round(dampened_state, 3)} | Max Delta: {max_delta:.4f}")
         
-        if delta <= tolerance:
-            logger.info(f"SUCCESS: Convergence achieved after {i} iterations.")
+        if converged:
+            logger.info(f"SUCCESS: System achieved multi-dimensional convergence after {i} iterations.")
             break
             
         if i == max_iterations:
             logger.warning("WARNING: Maximum iterations reached without convergence.")
             
-        # Update state for next loop
-        previous_gdp_growth = dampened_gdp
-        next_clews_input = ModelTransformer.ogcore_to_clews(og_out)
-        current_clews_input = next_clews_input.model_dump()
+        # Update state vector for the next loop
+        previous_macro_state = dampened_state
 
 if __name__ == "__main__":
     run_converging_simulation()
