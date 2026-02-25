@@ -1,55 +1,58 @@
-import logging
 import numpy as np
-from typing import Dict
+import pandas as pd
+import logging
+from .transformer import DimensionalityBridge
 
-logging.basicConfig(level=logging.INFO, format='%(levelname)s: %(message)s')
 logger = logging.getLogger(__name__)
 
-def check_nd_convergence(old_vector: np.ndarray, new_vector: np.ndarray, tolerance: float) -> Tuple[bool, float]:
+class ConvergingOrchestrator:
     """
-    Calculates the maximum absolute percentage change across all monitored variables.
-    Returns a tuple of (has_converged, max_delta).
+    Manages the stateful iterative loop between CLEWS and OG-Core.
+    Applies mathematical dampening to prevent infinite oscillation.
     """
-    # Add a tiny epsilon to the denominator to prevent division by zero
-    epsilon = 1e-9
-    deltas = np.abs((new_vector - old_vector) / (old_vector + epsilon))
-    max_delta = np.max(deltas)
-    return max_delta <= tolerance, float(max_delta)
+    def __init__(self, alpha: float = 0.2, tolerance: float = 1e-4, max_iterations: int = 20):
+        self.alpha = alpha  # Dampening factor
+        self.tolerance = tolerance # Epsilon threshold
+        self.max_iterations = max_iterations
+        self.previous_scale = None # Tracks Scale_{n-1}
 
-def run_converging_simulation(max_iterations: int = 15, tolerance: float = 0.005, alpha: float = 0.5):
-    """
-    Executes the two-way coupled run evaluating N-dimensional convergence.
-    """
-    logger.info("Initializing N-Dimensional OG-CLEWS Convergence...")
-    
-    # We now track an array of macro variables: e.g., [GDP Growth, Interest Rate, Carbon Tax Rev]
-    # In production, these map to the outputs from the pandas ETL layer
-    previous_macro_state = np.array([3.5, 2.0, 100.0]) 
-    
-    for i in range(1, max_iterations + 1):
-        logger.info(f"--- Iteration {i} ---")
-        
-        # ... (Mock execution & ETL steps remain structurally similar, but pass arrays) ...
-        # Simulate an OG-Core calculation returning a new vector
-        calculated_state = previous_macro_state + np.random.uniform(-0.5, 0.5, 3) / i 
-        
-        # Apply Dampening Factor (alpha) across the entire vector
-        dampened_state = (alpha * calculated_state) + ((1 - alpha) * previous_macro_state)
-        
-        # N-Dimensional Convergence Check
-        converged, max_delta = check_nd_convergence(previous_macro_state, dampened_state, tolerance)
-        
-        logger.info(f"State Vector: {np.round(dampened_state, 3)} | Max Delta: {max_delta:.4f}")
-        
-        if converged:
-            logger.info(f"SUCCESS: System achieved multi-dimensional convergence after {i} iterations.")
-            break
-            
-        if i == max_iterations:
-            logger.warning("WARNING: Maximum iterations reached without convergence.")
-            
-        # Update state vector for the next loop
-        previous_macro_state = dampened_state
+    def _apply_dampening(self, calculated_scale: pd.Series) -> pd.Series:
+        """
+        Applies the dampening factor to smoothly glide models toward equilibrium.
+        Formula: Scale_n = Scale_{n-1} + alpha * (Scale_calculated - Scale_{n-1})
+        """
+        if self.previous_scale is None:
+            self.previous_scale = pd.Series(1.0, index=calculated_scale.index)
 
-if __name__ == "__main__":
-    run_converging_simulation()
+        # Align indices to ensure safe vector math
+        calc, prev = calculated_scale.align(self.previous_scale, fill_value=1.0)
+        
+        # Calculate dampened scale
+        dampened_scale = prev + self.alpha * (calc - prev)
+        return dampened_scale
+
+    def check_convergence(self, current_scale: pd.Series) -> bool:
+        """Evaluates the maximum absolute difference between iterations."""
+        if self.previous_scale is None:
+            return False
+
+        calc, prev = current_scale.align(self.previous_scale, fill_value=1.0)
+        max_diff = np.max(np.abs(calc - prev))
+        
+        logger.info(f"Convergence Delta: {max_diff:.6f} (Threshold: {self.tolerance})")
+        return bool(max_diff < self.tolerance)
+
+    def run_iteration(self, n: int, og_gdp_output: pd.Series, base_demand: pd.DataFrame) -> pd.DataFrame:
+        """Executes a single step of the integration loop."""
+        logger.info(f"--- Iteration {n} ---")
+        
+        raw_scale = DimensionalityBridge.calculate_raw_scale(og_gdp_output)
+        final_scale = self._apply_dampening(raw_scale)
+        
+        if self.check_convergence(final_scale):
+            logger.info(f"SUCCESS: Models reached dynamic equilibrium at iteration {n}.")
+            return None # Signals the main runner to halt
+
+        # Update state and return the newly scaled physical parameters
+        self.previous_scale = final_scale
+        return DimensionalityBridge.apply_scale_vectorized(base_demand, final_scale)
