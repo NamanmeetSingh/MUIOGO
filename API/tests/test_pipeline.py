@@ -1,25 +1,37 @@
 import sys
 import os
+# Force Python to look in the parent directory (API/)
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 
 import pytest
+import pandas as pd
 from pydantic import ValidationError
-
 from og_clews_integration.schemas import ClewsOutputSchema
-from og_clews_integration.transformer import ModelTransformer
+from og_clews_integration.transformer import DimensionalityBridge
 
 def test_clews_schema_validation():
-    """Test that the schema catches invalid negative prices."""
+    """Test that the schema catches invalid negative prices using real OSeMOSYS variables."""
     with pytest.raises(ValidationError):
-        ClewsOutputSchema(iteration=1, avg_energy_price=-10.0, total_emissions=500.0)
+        # AnnualEmissions and Cost cannot be negative
+        ClewsOutputSchema(iteration=1, AnnualEmissions=-10.0, TotalDiscountedCostByTechnology=500.0)
 
-def test_transformer_logic():
-    """Test the math in the ETL transformer."""
-    mock_clews = ClewsOutputSchema(iteration=1, avg_energy_price=100.0, total_emissions=1000.0)
-    og_input = ModelTransformer.clews_to_ogcore(mock_clews, carbon_tax_rate=0.1)
+def test_forward_pass_aggregation():
+    """Test the pandas ETL transformer collapses dimensions correctly."""
+    # 1. Create a mock OSeMOSYS long-format dataframe
+    mock_clews_df = pd.DataFrame({
+        'Variable': ['AnnualEmissions', 'AnnualEmissions', 'CapitalInvestment', 'CapitalInvestment'],
+        'Region': ['REG1', 'REG1', 'REG1', 'REG1'],
+        'Dimension': ['CO2', 'CH4', 'SOLAR', 'WIND'],
+        'Year': [2026, 2026, 2026, 2026],
+        'Value': [100.0, 50.0, 1000.0, 2000.0]
+    })
     
-    assert og_input.energy_cost_index == 2.0  # 100.0 / 50.0
-    assert og_input.carbon_tax_revenue == 100.0 # 1000.0 * 0.1
-
-if __name__ == "__main__":
-    sys.exit(pytest.main([__file__]))
+    # 2. Run it through our Dimensionality Bridge
+    og_input = DimensionalityBridge.forward_pass_aggregation(mock_clews_df, carbon_tax_rate=0.1)
+    
+    # 3. Assert it collapsed the dimensions into 1D arrays properly
+    assert og_input.years == [2026]
+    # Total investment = 3000. Normalized (/1000) = 3.0
+    assert og_input.energy_cost_index == [3.0]  
+    # Total emissions = 150. Tax revenue (150 * 0.1) = 15.0
+    assert og_input.carbon_tax_revenue == [15.0]
