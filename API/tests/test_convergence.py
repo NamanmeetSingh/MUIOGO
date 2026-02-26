@@ -1,6 +1,7 @@
 import pandas as pd
 import numpy as np
 import logging
+from pathlib import Path
 from pydantic import BaseModel, Field
 from typing import List
 
@@ -8,13 +9,13 @@ from typing import List
 logging.basicConfig(level=logging.INFO, format='%(levelname)s: %(message)s')
 logger = logging.getLogger(__name__)
 
-# SCHEMAS (From schemas.py)
+# 1. SCHEMAS (From schemas.py)
 class OgCoreInputSchema(BaseModel):
     years: List[int]
     energy_cost_index: List[float]
     carbon_tax_revenue: List[float]
 
-# ETL PIPELINE (From transformer.py)
+# 2. ETL PIPELINE (From transformer.py)
 class DimensionalityBridge:
     @staticmethod
     def forward_pass_aggregation(clews_df: pd.DataFrame, carbon_tax_rate: float = 50.0) -> OgCoreInputSchema:
@@ -44,7 +45,7 @@ class DimensionalityBridge:
         updated_demand['Value'] = updated_demand['Value'] * mapped_scales
         return updated_demand
 
-# ORCHESTRATOR (From converger.py)
+# 3. ORCHESTRATOR (From converger.py)
 class ConvergingOrchestrator:
     def __init__(self, alpha: float = 0.3, tolerance: float = 1e-4, max_iterations: int = 20):
         self.alpha = alpha  # Dampening factor
@@ -80,66 +81,84 @@ class ConvergingOrchestrator:
         updated_demand = DimensionalityBridge.apply_scale_vectorized(base_demand, final_scale)
         return updated_demand, False
 
-# MOCK EXECUTION & TESTING
-def generate_mock_clews_data(demand_modifier: float = 1.0) -> pd.DataFrame:
-    """Generates dummy long-format OSeMOSYS outputs for years 2025-2035."""
-    years = list(range(2025, 2036))
-    data = []
-    for y in years:
-        # Assumed Relation: higher demand = higher emissions and investments
-        data.append(['AnnualEmissions', 'REG1', 'CO2', y, 500 * demand_modifier * (1 + (y-2025)*0.02)])
-        data.append(['CapitalInvestment', 'REG1', 'SOLAR', y, 2000 * demand_modifier * (1 + (y-2025)*0.05)])
-    return pd.DataFrame(data, columns=['Variable', 'Region', 'Dimension', 'Year', 'Value'])
+# 4. REAL DATA EXTRACTION & TESTING
+def extract_real_clews_data(csv_folder: Path) -> pd.DataFrame:
+    """Reads official OSeMOSYS CSVs and normalizes them for the ETL Bridge."""
+    
+    # 1. Ingest Emissions
+    emissions_file = csv_folder / "AnnualTechnologyEmission.csv"
+    if not emissions_file.exists():
+        raise FileNotFoundError(f"Missing demo data: {emissions_file}")
+        
+    df_emissions = pd.read_csv(emissions_file)
+    df_emissions = df_emissions.rename(columns={'y': 'Year', 'AnnualTechnologyEmission': 'Value'})
+    df_emissions['Variable'] = 'AnnualEmissions'
+
+    # 2. Ingest Capital Investment
+    investment_file = csv_folder / "CapitalInvestment.csv"
+    if not investment_file.exists():
+        raise FileNotFoundError(f"Missing demo data: {investment_file}")
+        
+    df_investment = pd.read_csv(investment_file)
+    df_investment = df_investment.rename(columns={'y': 'Year', 'CapitalInvestment': 'Value'})
+    df_investment['Variable'] = 'CapitalInvestment'
+
+    # 3. Combine into a single unified Dataframe
+    return pd.concat([df_emissions, df_investment], ignore_index=True)
 
 def run_mock_ogcore(macro_inputs: OgCoreInputSchema) -> pd.Series:
     """Simulates OG-Core outputting a GDP time series based on energy costs."""
     years = macro_inputs.years
     energy_costs = np.array(macro_inputs.energy_cost_index)
     
-    # Mock relation: High energy costs drag down the baseline 3% GDP growth
     base_gdp = 1000.0
     gdp_series = []
     
-    for i, cost in enumerate(energy_costs):
-        growth_rate = 0.03 - (cost * 0.005) # Cost drag
+    for cost in energy_costs:
+        # High energy investments cause a slight drag on baseline 3% growth
+        growth_rate = 0.03 - (cost * 0.0005) 
         base_gdp = base_gdp * (1 + growth_rate)
         gdp_series.append(base_gdp)
         
     return pd.Series(gdp_series, index=years)
 
-def test_full_pipeline():
-    logger.info("Starting Full Pipeline Test...")
+def test_real_pipeline():
+    logger.info("Starting Full Pipeline Test using official CLEWs.Demo data...")
     
-    # Baseline Demand Profile (CLEWS Input)
+    # Path to the newly extracted mentor demo data
+    demo_csv_path = Path("WebAPP/DataStorage/CLEWs Demo/res/REF/csv")
+    
+    # Baseline Demand Profile (Mocked for reverse pass)
     base_demand = pd.DataFrame({
-        'Variable': ['SpecifiedDemandProfile'] * 11,
-        'Region': ['REG1'] * 11,
-        'Dimension': ['ELC'] * 11,
-        'Year': list(range(2025, 2036)),
-        'Value': [100.0] * 11
+        'Year': list(range(2020, 2071)),
+        'Value': [100.0] * 51
     })
 
-    orchestrator = ConvergingOrchestrator(alpha=0.25, tolerance=1e-4)
-    current_demand_modifier = 1.0
+    orchestrator = ConvergingOrchestrator(alpha=0.3, tolerance=1e-4)
 
     for i in range(1, 15):
-        # Run CLEWS (Mock)
-        clews_output_df = generate_mock_clews_data(demand_modifier=current_demand_modifier)
-        
-        # ETL Forward Pass (CLEWS -> OG-Core)
+        # 1. Extract Real Data
+        try:
+            clews_output_df = extract_real_clews_data(demo_csv_path)
+        except Exception as e:
+            logger.error(f"Data Extraction Failed: {e}")
+            return
+            
+        # 2. ETL Forward Pass (CLEWS -> OG-Core)
         og_inputs = DimensionalityBridge.forward_pass_aggregation(clews_output_df)
         
-        # Run OG-Core (Mock)
+        if i == 1:
+            logger.info(f"REAL DATA PARSED. Time Horizon: {og_inputs.years[0]} to {og_inputs.years[-1]}")
+            logger.info(f"Carbon Tax Revenue Vector (First 3): {np.round(og_inputs.carbon_tax_revenue[:3], 2)}")
+        
+        # 3. Run OG-Core (Mock)
         og_gdp_vector = run_mock_ogcore(og_inputs)
         
-        # Orchestrate & Apply Dampening (OG-Core -> CLEWS)
+        # 4. Orchestrate & Apply Dampening (OG-Core -> CLEWS)
         updated_demand_df, has_converged = orchestrator.run_iteration(i, og_gdp_vector, base_demand)
         
         if has_converged:
             break
-            
-        # (For this mock, we just take the mean scale to feed the generator)
-        current_demand_modifier = updated_demand_df['Value'].mean() / 100.0
 
 if __name__ == "__main__":
-    test_full_pipeline()
+    test_real_pipeline()
