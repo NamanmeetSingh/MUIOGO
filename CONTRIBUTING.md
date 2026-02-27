@@ -17,6 +17,15 @@ Thanks for contributing!
 - Upstream collaboration is encouraged, but this repo needs independent completion
 - `MUIO-Mac` may be referenced, but `MUIOGO` targets platform-independent operation
 
+## Issue Prioritization
+
+We use the following priority system:
+- High
+- Medium
+- Low
+
+❗️Priorities are assigned by maintainers.
+
 ## Workflow
 
 1. Start from an issue
