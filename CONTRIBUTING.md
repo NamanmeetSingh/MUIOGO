@@ -20,9 +20,9 @@ Thanks for contributing!
 ## Issue Prioritization
 
 We use the following priority system:
-- High
-- Medium
-- Low
+- High: issues that should be worked on ASAP
+- Medium: important issues
+- Low: issues that may be important but that can wait
 
 ❗️Priorities are assigned by maintainers.
 
