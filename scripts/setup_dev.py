@@ -35,8 +35,6 @@ import textwrap
 import venv
 import zipfile
 from pathlib import Path
-import ctypes
-import winreg
 import urllib.request
 import tempfile
 
@@ -293,6 +291,7 @@ def _is_admin() -> bool:
     if SYSTEM != "Windows":
         return True
     try:
+        import ctypes
         return ctypes.windll.shell32.IsUserAnAdmin() != 0
     except Exception:
         return False
@@ -308,6 +307,8 @@ def _windows_add_to_user_path(bin_dir: Path) -> None:
 
     # Persist to user PATH via registry
     try:
+        import winreg
+        import ctypes
         with winreg.OpenKey(
             winreg.HKEY_CURRENT_USER,
             "Environment",
