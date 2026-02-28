@@ -35,6 +35,10 @@ import textwrap
 import venv
 import zipfile
 from pathlib import Path
+import ctypes
+import winreg
+import urllib.request
+import tempfile
 
 # ──────────────────────────────────────────────────────────────────────────────
 # Constants
@@ -285,6 +289,102 @@ def check_demo_data() -> bool:
     return False
 
 
+def _is_admin() -> bool:
+    if SYSTEM != "Windows":
+        return True
+    try:
+        return ctypes.windll.shell32.IsUserAnAdmin() != 0
+    except Exception:
+        return False
+
+
+def _windows_add_to_user_path(bin_dir: Path) -> None:
+    """Mutate current-session PATH, persist to HKCU registry, and broadcast change."""
+    # Mutate PATH in current session so verification passes immediately
+    current = os.environ.get("PATH", "")
+    entries = current.split(os.pathsep)
+    if str(bin_dir) not in entries:
+        os.environ["PATH"] = str(bin_dir) + os.pathsep + current
+
+    # Persist to user PATH via registry
+    try:
+        with winreg.OpenKey(
+            winreg.HKEY_CURRENT_USER,
+            "Environment",
+            0,
+            winreg.KEY_READ | winreg.KEY_SET_VALUE,
+        ) as key:
+            try:
+                cur, _ = winreg.QueryValueEx(key, "PATH")
+            except FileNotFoundError:
+                cur = ""
+            winreg.SetValueEx(
+                key,
+                "PATH",
+                0,
+                winreg.REG_EXPAND_SZ,
+                f"{bin_dir};{cur}" if cur else str(bin_dir),
+            )
+        # Broadcast PATH change
+        ctypes.windll.user32.SendMessageTimeoutW(
+            0xFFFF, 0x001A, 0, "Environment", 0, 1000, None
+        )
+    except Exception as exc:
+        _print_warn(
+            "Could not persist CBC to user PATH; add manually", f"{bin_dir} ({exc})"
+        )
+    print("Note: open a NEW terminal for this PATH change to take effect.")
+
+
+def _install_cbc_windows_manual() -> bool:
+    """
+    Download official CBC Windows binary, extract to LOCALAPPDATA, and add to PATH.
+    """
+    version = "2.10.12"
+    url = (
+        f"https://github.com/coin-or/Cbc/releases/download/releases%2F{version}/"
+        f"Cbc-releases.{version}-w64-msvc17-md.zip"
+    )
+    install_dir = Path(os.environ.get("LOCALAPPDATA", str(Path.home()))) / "cbc"
+    try:
+        install_dir.mkdir(parents=True, exist_ok=True)
+        print(f"  Downloading CBC {version} from GitHub ...")
+        fd, tmp_str = tempfile.mkstemp(suffix=".zip")
+        os.close(fd)
+
+        tmp_path = Path(tmp_str)
+        req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0"})
+        with urllib.request.urlopen(req) as response:
+            with open(tmp_path, "wb") as f:
+                f.write(response.read())
+
+        print("  Downloaded file size:", tmp_path.stat().st_size)
+        if tmp_path.stat().st_size < 10_000_000:
+            _print_fail("CBC download invalid (unexpected file size)")
+            return False
+
+        print("  Extracting CBC ...")
+        with zipfile.ZipFile(tmp_path, "r") as zf:
+            _safe_extract_zip(zf, install_dir)
+        tmp_path.unlink()
+
+        bin_dir = install_dir / f"Cbc-releases.{version}-w64-msvc17-md" / "bin"
+        if not bin_dir.exists():
+            # Fallback: search extracted tree for cbc.exe
+            matches = list(install_dir.rglob("cbc.exe"))
+            if not matches:
+                _print_fail("cbc.exe not found in extracted archive")
+                return False
+            bin_dir = matches[0].parent
+
+        _windows_add_to_user_path(bin_dir)
+        _print_pass("CBC installed via manual fallback", str(bin_dir))
+        return True
+    except Exception as exc:
+        _print_fail("CBC manual install failed", str(exc))
+        return False
+
+
 # ──────────────────────────────────────────────────────────────────────────────
 # Step 1 – Python virtual environment
 # ──────────────────────────────────────────────────────────────────────────────
@@ -467,6 +567,12 @@ def install_solvers() -> bool:
     # ── Windows ───────────────────────────────────────────────────────────
     elif SYSTEM == "Windows":
         if _which("choco"):
+            if not _is_admin():
+                _print_warn(
+                    "Not running as Administrator",
+                    "choco installs may fail; CBC will use manual fallback if needed.",
+                )
+
             if not glpk_ok:
                 r = _run(["choco", "install", "glpk", "-y"],
                          capture_output=True, text=True)
@@ -478,8 +584,11 @@ def install_solvers() -> bool:
                 r = _run(["choco", "install", "coinor-cbc", "-y"],
                          capture_output=True, text=True)
                 if r.returncode != 0:
-                    _print_fail("choco install coinor-cbc", r.stderr.strip())
-                    success = False
+                    _print_warn("coinor-cbc not available via Chocolatey, using manual fallback")
+
+                    if not _install_cbc_windows_manual():
+                        _print_fail("CBC installation failed", "Manual fallback also failed")
+                        success = False
 
         elif _which("winget"):
             _print_warn(
