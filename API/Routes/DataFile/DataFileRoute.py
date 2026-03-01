@@ -61,7 +61,7 @@ def deleteCaseRun():
         caserunname = request.json['caserunname']
         resultsOnly = request.json['resultsOnly']
 
-        if casename is None:
+        if not casename:
             return jsonify({'message': 'No model selected.', 'status_code': 'error'}), 400
 
         casePath = Path(Config.DATA_STORAGE, casename, 'res', caserunname)
@@ -78,7 +78,7 @@ def deleteCaseRun():
         caserun = DataFile(casename)
         response = caserun.deleteCaseRun(caserunname, resultsOnly)
         return jsonify(response), 200
-    except(IOError):
+    except FileNotFoundError:
         return jsonify('No existing cases!'), 404
     except OSError:
         return jsonify({'message': 'A filesystem error occurred.', 'status_code': 'error'}), 500
